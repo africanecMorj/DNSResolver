@@ -1,42 +1,51 @@
-#[derive(Debug, Clone, Copy)]
-pub struct DnsHeader {
-    pub id: u16,
-    pub flags: u16,
-    pub qd_count: u16,
-    pub an_count: u16,
-    pub ns_count: u16,
-    pub ar_count: u16,
-}
+pub mod dns;
 
-pub struct Question {
-    pub name: String,
-    pub qtype: RecordType,
-    pub class: u16,
-}
+use dns::{
+    DnsMessage,
+    RecordType,
+};
 
-pub struct Message {
-    pub header: DnsHeader,
-    pub questions: Vec<Question>,
-    pub answers: Vec<Record>,
-    pub authorities: Vec<Record>,
-    pub additionals: Vec<Record>,
-}
+fn main() {
+    let packet = [
+        0x12, 0x34, // ID
+        0x01, 0x00, // flags
+        0x00, 0x01, // QDCOUNT
+        0x00, 0x00, // ANCOUNT
+        0x00, 0x00, // NSCOUNT
+        0x00, 0x00, // ARCOUNT
 
-impl DnsHeader {
-    pub const SIZE: usize = 12;
+        // www.example.com
+        0x03,
+        b'w', b'w', b'w',
 
-    pub fn parse(buf: &[u8]) -> Option<Self> {
-        if buf.len() < Self::SIZE {
-            return None;
-        }
+        0x07,
+        b'e', b'x', b'a', b'm',
+        b'p', b'l', b'e',
 
-        Some(Self {
-            id: u16::from_be_bytes([buf[0], buf[1]]),
-            flags: u16::from_be_bytes([buf[2], buf[3]]),
-            qd_count: u16::from_be_bytes([buf[4], buf[5]]),
-            an_count: u16::from_be_bytes([buf[6], buf[7]]),
-            ns_count: u16::from_be_bytes([buf[8], buf[9]]),
-            ar_count: u16::from_be_bytes([buf[10], buf[11]]),
-        })
-    }
+        0x03,
+        b'c', b'o', b'm',
+
+        0x00,
+
+        // QTYPE = A
+        0x00, 0x01,
+
+        // QCLASS = IN
+        0x00, 0x01,
+    ];
+
+    let message = DnsMessage::parse(&packet)
+        .unwrap();
+
+    println!("{message:#?}");
+
+    assert_eq!(
+        message.questions[0].name,
+        "www.example.com"
+    );
+
+    assert_eq!(
+        message.questions[0].qtype,
+        RecordType::A
+    );
 }
