@@ -1,51 +1,31 @@
-pub mod dns;
+use tokio::net::UdpSocket;
 
-use dns::{
+use crate::dns::{
     DnsMessage,
     RecordType,
 };
 
-fn main() {
-    let packet = [
-        0x12, 0x34, // ID
-        0x01, 0x00, // flags
-        0x00, 0x01, // QDCOUNT
-        0x00, 0x00, // ANCOUNT
-        0x00, 0x00, // NSCOUNT
-        0x00, 0x00, // ARCOUNT
+mod dns;
 
-        // www.example.com
-        0x03,
-        b'w', b'w', b'w',
-
-        0x07,
-        b'e', b'x', b'a', b'm',
-        b'p', b'l', b'e',
-
-        0x03,
-        b'c', b'o', b'm',
-
-        0x00,
-
-        // QTYPE = A
-        0x00, 0x01,
-
-        // QCLASS = IN
-        0x00, 0x01,
-    ];
-
-    let message = DnsMessage::parse(&packet)
-        .unwrap();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let message = DnsMessage::query(
+        1234,
+        "google.com",
+        RecordType::A,
+    )?;
 
     println!("{message:#?}");
 
-    assert_eq!(
-        message.questions[0].name,
-        "www.example.com"
-    );
+    let socket =
+        UdpSocket::bind("0.0.0.0:0").await?;
 
-    assert_eq!(
-        message.questions[0].qtype,
-        RecordType::A
-    );
+    socket
+        .send_to(
+            &[],
+            "8.8.8.8:53",
+        )
+        .await?;
+
+    Ok(())
 }

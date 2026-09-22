@@ -1,118 +1,123 @@
-use super::error::DnsError;
-
-pub fn parse_name(
-    packet: &[u8],
-    offset: &mut usize,
-) -> Result<String, DnsError> {
-    let mut labels = Vec::new();
-    let mut pos = *offset;
-
-    // Захист від pointer loops.
-    let mut jumps = 0;
-    let mut jumped = false;
-
-    loop {
-        if pos >= packet.len() {
-            return Err(DnsError::Truncated);
-        }
-
-        let len = packet[pos];
-
-        // Compression pointer: 11xxxxxx
-        if len & 0xC0 == 0xC0 {
-            if pos + 1 >= packet.len() {
-                return Err(DnsError::Truncated);
-            }
-
-            let pointer = (((len as usize) & 0x3F) << 8)
-                | packet[pos + 1] as usize;
-
-            if pointer >= packet.len() {
-                return Err(DnsError::InvalidName);
-            }
-
-            if !jumped {
-                *offset = pos + 2;
-                jumped = true;
-            }
-
-            pos = pointer;
-
-            jumps += 1;
-
-            if jumps > 32 {
-                return Err(DnsError::InvalidName);
-            }
-
-            continue;
-        }
-
-        // Reserved compression bits.
-        if len & 0xC0 != 0 {
-            return Err(DnsError::InvalidName);
-        }
-
-        pos += 1;
-
-        // End of name.
-        if len == 0 {
-            if !jumped {
-                *offset = pos;
-            }
-
-            break;
-        }
-
-        let len = len as usize;
-
-        if len > 63 {
-            return Err(DnsError::InvalidLabel);
-        }
-
-        if pos + len > packet.len() {
-            return Err(DnsError::Truncated);
-        }
-
-        let label = &packet[pos..pos + len];
-
-        let label = std::str::from_utf8(label)
-            .map_err(|_| DnsError::InvalidLabel)?;
-
-        labels.push(label.to_string());
-
-        pos += len;
-    }
-
-    if labels.is_empty() {
-        Ok(".".to_string())
-    } else {
-        Ok(labels.join("."))
-    }
-}
+use super::{
+    cursor::Cursor,
+    error::DnsError,
+};
 
 pub fn encode_name(
     name: &str,
-    buf: &mut Vec<u8>,
+    out: &mut Vec<u8>,
 ) -> Result<(), DnsError> {
-    if name == "." {
-        buf.push(0);
+    let name = name.trim_end_matches('.');
+
+    if name.is_empty() {
+        out.push(0);
         return Ok(());
     }
 
-    for label in name.trim_end_matches('.').split('.') {
+    for label in name.split('.') {
         if label.is_empty() {
             return Err(DnsError::InvalidName);
         }
 
         if label.len() > 63 {
-            return Err(DnsError::InvalidLabel);
+            return Err(DnsError::InvalidLabelLength);
         }
 
-        buf.push(label.len() as u8);
-        buf.extend_from_slice(label.as_bytes());
+        out.push(label.len() as u8);
+        out.extend_from_slice(label.as_bytes());
     }
 
-    buf.push(0);
+    out.push(0);
 
     Ok(())
+}
+
+pub fn parse_name(cursor: &mut Cursor<'_>) -> Result<String, DnsError> {
+    let mut labels = Vec::new();
+
+    let mut pos = cursor.position();
+    let mut jumped = false;
+
+    let mut jumps = 0;
+
+    loop {
+        if jumps > 32 {
+            return Err(DnsError::CompressionLoop);
+        }
+
+        let byte = *cursor
+            .packet()
+            .get(pos)
+            .ok_or(DnsError::UnexpectedEof)?;
+
+        // Normal label
+        if byte & 0xC0 == 0 {
+            let len = byte as usize;
+
+            // Root label
+            if len == 0 {
+                if !jumped {
+                    cursor.read_u8()?;
+                }
+
+                break;
+            }
+
+            if len > 63 {
+                return Err(DnsError::InvalidLabelLength);
+            }
+
+            let start = pos + 1;
+            let end = start + len;
+
+            let label = cursor
+                .packet()
+                .get(start..end)
+                .ok_or(DnsError::UnexpectedEof)?;
+
+            let label = std::str::from_utf8(label)
+                .map_err(|_| DnsError::InvalidUtf8)?;
+
+            labels.push(label.to_string());
+
+            pos = end;
+
+            if !jumped {
+                // We are consuming bytes from the real cursor.
+                cursor.read_u8()?;
+                cursor.read_bytes(len)?;
+            }
+
+            continue;
+        }
+
+        // Compression pointer
+        if byte & 0xC0 == 0xC0 {
+            let second = *cursor
+                .packet()
+                .get(pos + 1)
+                .ok_or(DnsError::UnexpectedEof)?;
+
+            let pointer =
+                (((byte as u16) & 0x3F) << 8)
+                | second as u16;
+
+            if !jumped {
+                // Important:
+                // consume the pointer in the main stream.
+                cursor.read_u8()?;
+                cursor.read_u8()?;
+                jumped = true;
+            }
+
+            pos = pointer as usize;
+            jumps += 1;
+
+            continue;
+        }
+
+        return Err(DnsError::InvalidName);
+    }
+
+    Ok(labels.join("."))
 }
