@@ -17,6 +17,39 @@ pub struct DnsMessage {
 }
 
 impl DnsMessage {
+    pub fn encode(&self) -> Result<Vec<u8>, DnsError> {
+        let mut out = Vec::with_capacity(512);
+
+        // Header
+        out.extend_from_slice(&self.header.id.to_be_bytes());
+        out.extend_from_slice(&self.header.flags.to_be_bytes());
+
+        out.extend_from_slice(
+            &self.header.qd_count.to_be_bytes()
+        );
+
+        out.extend_from_slice(
+            &self.header.an_count.to_be_bytes()
+        );
+
+        out.extend_from_slice(
+            &self.header.ns_count.to_be_bytes()
+        );
+
+        out.extend_from_slice(
+            &self.header.ar_count.to_be_bytes()
+        );
+
+        // Questions
+        for question in &self.questions {
+            question.encode(&mut out)?;
+        }
+
+        Ok(out)
+    }
+}
+
+impl DnsMessage {
     pub fn query(
         id: u16,
         name: &str,

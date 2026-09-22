@@ -1,31 +1,45 @@
 use tokio::net::UdpSocket;
 
-use crate::dns::{
+mod dns;
+
+use dns::{
     DnsMessage,
+    DnsResponse,
     RecordType,
 };
 
-mod dns;
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let message = DnsMessage::query(
+    let query = DnsMessage::query(
         1234,
         "google.com",
         RecordType::A,
     )?;
 
-    println!("{message:#?}");
+    let packet = query.encode()?;
 
-    let socket =
-        UdpSocket::bind("0.0.0.0:0").await?;
+    let socket = UdpSocket::bind("0.0.0.0:0").await?;
 
     socket
-        .send_to(
-            &[],
-            "8.8.8.8:53",
-        )
+        .send_to(&packet, "8.8.8.8:53")
         .await?;
+
+    let mut buffer = [0u8; 512];
+
+    let (size, addr) = socket.recv_from(&mut buffer).await?;
+
+    println!("received {size} bytes from {addr}");
+
+    let response = DnsResponse::parse(&buffer[..size])?;
+
+    println!("transaction id: {}", response.id());
+    println!("rcode: {}", response.rcode());
+    println!("success: {}", response.is_success());
+    println!("truncated: {}", response.is_truncated());
+
+    for address in response.ipv4_addresses() {
+        println!("IPv4: {address}");
+    }
 
     Ok(())
 }
